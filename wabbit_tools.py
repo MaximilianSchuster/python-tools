@@ -1210,4 +1210,31 @@ def prediction1D( signal1, order=4 ):
         signal_interp[2*k+1] = a*signal1[k]+a*signal1[k+1]+b*signal1[k-1]+b*signal1[k+2]
 
     return signal_interp
+#%%
+def dir_dense_matrix_2D( direc, var ):
+    #Extract all the wabbit fields (all variables or just one) to a field type matrix of dimensions(n_timesteps x n_x x n_y)
+    import glob
+    import numpy as np
+    #import wabbit_tools as w2p
+    if var is None:
+        path = direc+'/*.h5'
+        files=glob.glob(path)
+        files.sort()
+    
+    else:
+        path = direc+'/'+var+'*.h5'
+        files=glob.glob(path)
+        files.sort()
 
+
+    noF = len(files) # number of total files
+    fin = m=read_wabbit_hdf5(files[0])
+    hel = len(dense_matrix(fin[1], fin[2], fin[4], fin[5], dim=2)[0])
+    field = np.zeros((noF,hel,hel))
+    for file in range(noF):
+        m=read_wabbit_hdf5(files[file])
+        mm=dense_matrix(m[1],m[2],m[4],m[5], dim=2)
+        field[file,:,:]=mm[0]       
+
+
+    return field
