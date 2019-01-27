@@ -1238,3 +1238,26 @@ def dir_dense_matrix_2D( direc, var ):
 
 
     return field
+
+#%%
+def space_time_slice(direc,var,row,column):
+    import numpy as np
+    X_T_MAT = dir_dense_matrix_2D(direc,var)
+    if row is None and column is None:
+        print('!!!ERROR!!! A row OR a column has to be specified')
+        X_T = 0
+    elif row is not None and column is not None:
+        print('!!!ERROR!!! A row OR a column has to be specified')
+        X_T = 0
+    elif column is None:
+        X_T = np.zeros((np.shape(X_T_MAT)[0],np.shape(X_T_MAT)[2]))
+        for line in range(np.shape(X_T)[0]):
+            X_T[line,:]= X_T_MAT[line,row,:]
+    elif row is None:
+        X_T = np.zeros((np.shape(X_T_MAT)[0],np.shape(X_T_MAT)[1]))
+        for line in range(np.shape(X_T)[0]):
+            X_T[line,:]= X_T_MAT[line,:,column]
+    return X_T
+
+#%%
+
