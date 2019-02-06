@@ -15,6 +15,7 @@ import scipy
 from scipy import io
 from scipy import signal
 import insect_tools as insect
+import wabbit_tools as w2p
 # import the geometric variables from the ini-file
 
 
@@ -27,7 +28,8 @@ config.read("/home/max/Masterarbeit/Python/Code Dev/ion_funnel_light.ini")
 # 1 = first try with post flame distribution
 # 2 = DDT setup
 # 3 = acoustic pressure pulse
-case = 2;
+# 4 = Sod's shock tube
+case = 4;
 #GEOMETRY
 Lx=config.get("Domain", "domain_size")
 Lx=float(Lx[0:3])
@@ -40,12 +42,14 @@ D_pip = D_pip[:-1]
 D_pip =float(D_pip)
 D_ple= config.get("plenum", "diameter_ple")
 D_ple= float(D_ple[:-1])
-D_ple = 0.2
+D_ple = 0.1
+D_pip=0.1
 R_pip=D_pip/2
 R_ple=D_ple/2
 L_pip = float(config.get("plenum","length_pip")[:-1])
-L_pip = 0.4
+L_pip = 0.0
 L_ple = float(config.get("plenum","length_ple")[:-1])
+L_ple = 0.4
 wall_thickness= config.get("plenum", "wall_thickness")
 wall_thickness = float(wall_thickness[:-1])*Lx
 wall_thickness = 0.00625
@@ -159,7 +163,27 @@ for ix in range(0, Ds):
             u[ix,iy] = 0
             v[ix,iy] = 0
            # mask[ix,iy] = mask[ix,iy]/C_sp
-
+#%%
+if case == 4:
+    pL=1;
+    rhoL=1;
+    pR=0.125;
+    rhoR=0.1;
+    P = np.ones((Ds,Ds))*pL
+    rho = np.ones((Ds,Ds))*rhoL
+    u = np.zeros((Ds,Ds))
+    v = u
+    for ix in range(0, Ds):
+        for iy in range(0,Ds):
+            y = Ly/Ds*iy
+            x= Lx/Ds*ix
+            r = abs(Ly/2-y)
+            if r <=R_pip:
+                if x>0.5*Lx and x < Lx-wall_thickness:
+                    P[ix,iy]=pR
+                    rho[ix,iy]=rhoR
+                    
+#%%
 #pip_length=pip_length-pip_start          
 ad_flame_p = np.asarray(np.zeros((pip_width,pip_length)))
 ad_flame_rho = np.asarray(np.zeros((pip_width,pip_length)))
@@ -182,19 +206,17 @@ for iy in range(int(pip_length)):#(0,int(pip_length-1)):
     elif case==2:
         ad_flame_p[:,iy] =np.ones(int(pip_width))*p_t1[kk]#*p_t0[k]#+ np.cosh(k[0]*np.ones(1,pip_length))
         ad_flame_rho[:,iy]=np.ones(int(pip_width))*rho_t1[kk]
-        ad_flame_u[:,iy]=(-cc+cc[0])/(-cc[mid]+cc[0])*u_t1[kk]
-
+        ad_flame_u[:,iy]=(-cc+cc[0])/(-cc[mid]+cc[0])*u_t1[kk] 
         
+if ((case==2) or (case==3)):       
+        nx_grid_min=pip_start
+        nx_grid_max=pip_length+pip_start
+        ny_grid_min=(Ds+1)/2-1-pip_width/2
+        ny_grid_max=(Ds+1)/2-1+pip_width/2
         
-        
-nx_grid_min=pip_start
-nx_grid_max=pip_length+pip_start
-ny_grid_min=(Ds+1)/2-1-pip_width/2
-ny_grid_max=(Ds+1)/2-1+pip_width/2
-
-P[int(ny_grid_min):int(ny_grid_max),int(nx_grid_min):int(nx_grid_max)] = ad_flame_p  
-rho[int(ny_grid_min):int(ny_grid_max),int(nx_grid_min):int(nx_grid_max)] = ad_flame_rho  
-u[int(ny_grid_min):int(ny_grid_max),int(nx_grid_min):int(nx_grid_max)] = ad_flame_u
+        P[int(ny_grid_min):int(ny_grid_max),int(nx_grid_min):int(nx_grid_max)] = ad_flame_p  
+        rho[int(ny_grid_min):int(ny_grid_max),int(nx_grid_min):int(nx_grid_max)] = ad_flame_rho  
+        u[int(ny_grid_min):int(ny_grid_max),int(nx_grid_min):int(nx_grid_max)] = ad_flame_u
 #%%
 if case ==3:
         rho0 =1.225;
@@ -210,6 +232,7 @@ if case ==3:
         u = np.zeros([257,257]);
         v = u;
 
+#if case == 4:
 
 
 NdF = 4 # number of datafields
@@ -217,10 +240,16 @@ NdF = 4 # number of datafields
 dx = 2**(-lvl) * Lx / (Bs-1) # spacing
 dy = 2**(-lvl)*Ly/(Bs-1)
 
-U = np.transpose(u)
-V = np.transpose(v)
-RHO = np.transpose(rho)
-P = np.transpose(P)
+if case ==2 or case ==1 or case ==3:
+    U = np.transpose(u)
+    V = np.transpose(v)
+    RHO = np.transpose(rho)
+    P = np.transpose(P)
+if case ==4:
+    U = u
+    V = v
+    RHO = rho
+
 
 Q1 = np.zeros([1,256,256])
 Q1[:,0:256,0:256]=P[0:256,0:256]
@@ -239,7 +268,10 @@ Q4[:,0:256,0:256]=RHO[0:256,0:256]
 Q44 = insect.write_flusi_HDF5('rho_00.h5', 0, [0, 0.4,0.2], Q4, viscosity=0.0, origin=np.array([0.0,0.0,0.0]))
 
 #%% CONVERT FLUSI TO WABBIT 
-os.system("/home/max/FORK_SCHUSTER/WABBIT/wabbit-post --flusi-to-wabbit p_00.h5 p_0.h5 33")
-os.system("/home/max/FORK_SCHUSTER/WABBIT/wabbit-post --flusi-to-wabbit rho_00.h5 rho_0.h5 33")
-os.system("/home/max/FORK_SCHUSTER/WABBIT/wabbit-post --flusi-to-wabbit Ux_00.h5 Ux_0.h5 33")
-os.system("/home/max/FORK_SCHUSTER/WABBIT/wabbit-post --flusi-to-wabbit Uy_00.h5 Uy_0.h5 33")
+os.system("/home/max/FORK_SCHUSTER/WABBIT/wabbit-post --flusi-to-wabbit p_00.h5 p_000000000000.h5 33")
+os.system("/home/max/FORK_SCHUSTER/WABBIT/wabbit-post --flusi-to-wabbit rho_00.h5 rho_000000000000.h5 33")
+os.system("/home/max/FORK_SCHUSTER/WABBIT/wabbit-post --flusi-to-wabbit Ux_00.h5 Ux_000000000000.h5 33")
+os.system("/home/max/FORK_SCHUSTER/WABBIT/wabbit-post --flusi-to-wabbit Uy_00.h5 Uy_000000000000.h5 33")
+
+#
+w2p.plot_wabbit_file('rho_000000000000.h5')
