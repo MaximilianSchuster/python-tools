@@ -2,7 +2,6 @@
 # -*- coding: utf-8 -*-
 """
 Created on Thu Dec 28 15:41:48 2017
-
 @author: engels
 """
 import numpy as np
@@ -318,10 +317,8 @@ def block_level_distribution_file( file ):
 #%%
 def read_wabbit_hdf5(file):
     """ Read a wabbit-type HDF5 of block-structured data.
-
     Return time, x0, dx, box, data, treecode.
     Get number of blocks and blocksize as
-
     N, Bs = data.shape[0], data.shape[1]
     """
     import h5py
@@ -377,20 +374,27 @@ def read_treecode_hdf5(file):
     return treecode
 
 #%%
-def write_wabbit_hdf5( file, time, x0, dx, box, data, treecode ):
+def write_wabbit_hdf5( file, time, x0, dx, box, data, treecode, iteration = 0,  ):
     """ Write data from wabbit to an HDF5 file """
     import h5py
     import numpy as np
 
+
+    Level = np.size(treecode,1)
     if len(data.shape)==4:
+        Bs=[0]*3
         # 3d data
-        nb, nx, ny, nz = data.shape
-        print( "Writing to file=%s max=%e min=%e size=%i %i %i " % (file, np.max(data), np.min(data), nx,ny,nz) )
+        N, Bs[0], Bs[1], Bs[2] = data.shape
+        print( "Writing to file=%s max=%e min=%e size=%i %i %i " % (file, np.max(data), np.min(data), Bs[0], Bs[1], Bs[2]) )
 
     else:
         # 2d data
-        nx, ny = data.shape
-        print( "Writing to file=%s max=%e min=%e size=%i %i" % (file, np.max(data), np.min(data), nx,ny) )
+        Bs=[0]*2
+        N, Bs[0], Bs[1] = data.shape
+        print("~~~~~~~~~~~~~~~~~~~~~~~~~")
+        print("Writing file %s" % (file) )
+        print("Time=%e it=%i N=%i Bs[0]=%i Bs[1]=%i Level=%i" % (time, iteration, N, Bs[0], Bs[1],Level) )
+        print("~~~~~~~~~~~~~~~~~~~~~~~~~")
 
 
     fid = h5py.File( file, 'w')
@@ -405,16 +409,17 @@ def write_wabbit_hdf5( file, time, x0, dx, box, data, treecode ):
     fid = h5py.File(file,'a')
     dset_id = fid.get( 'blocks' )
     dset_id.attrs.create('time', time)
-    dset_id.attrs.create('iteration', -99)
+    dset_id.attrs.create('iteration', iteration)
     dset_id.attrs.create('domain-size', box )
+    dset_id.attrs.create('total_number_blocks', N )
     fid.close()
 
 #%%
+
+
 def read_wabbit_hdf5_dir(dir):
     """ Read all h5 files in directory dir.
-
     Return time, x0, dx, box, data, treecode.
-
     Use data["phi"][it] to reference quantity phi at iteration it
     """
     import numpy as np
@@ -758,6 +763,25 @@ def convergence_order(N, err):
 
     return x[0]
 
+def logfit(N, err):
+    """ This is a small function that returns the logfit, i.e. the least
+    squares fit to the log of the two passed lists.
+    """
+    import numpy as np
+
+    if len(N) != len(err):
+        raise ValueError('Convergence order args do not have same length')
+
+    A = np.ones([len(err), 2])
+    B = np.ones([len(err), 1])
+    # ERR = A*N + B
+    for i in range( len(N) ) :
+        A[i,0] = np.log10(N[i])
+        B[i] = np.log10(err[i])
+
+    x, residuals, rank, singval  = np.linalg.lstsq(A,B)
+
+    return x
 
 
 def plot_wabbit_dir(d, savepng=False):
@@ -804,14 +828,12 @@ def plot_wabbit_file( file, savepng=False, savepdf=False, cmap='rainbow', caxis=
                      gridonly_coloring='mpirank', flipud=False):
 
     """ Read a (2D) wabbit file and plot it as a pseudocolor plot.
-
     Keyword arguments:
         * savepng directly store a image file
         * cmap colormap for data
         * caxis manually specify glbal min / max for color plot
         * block_edge_alpha and block_edge_color defines the transparency
         and color of the blocks
-
     """
     import numpy as np
     import matplotlib.patches as patches
@@ -987,7 +1009,6 @@ def wabbit_error_vs_flusi(fname_wabbit, fname_flusi, norm=2, dim=2):
     """ Compute the error (in some norm) wrt a flusi field.
     Useful for example for the half-swirl test where no exact solution is available
     at mid-time (the time of maximum distortion)
-
     NOTE: We require the wabbit-field to be already full (but still in block-data) so run
     ./wabbit-post 2D --sparse-to-dense input_00.h5 output_00.h5
     first
@@ -1063,7 +1084,6 @@ def flusi_error_vs_flusi(fname_flusi1, fname_flusi2, norm=2, dim=2):
 #%%
 def to_dense_grid( fname_in, fname_out):
     """ Convert a WABBIT grid to a full dense grid in a single matrix.
-
     We asssume here that interpolation has already been performed, i.e. all
     blocks are on the same (finest) level.
     """
@@ -1126,10 +1146,8 @@ def dense_matrix(  x0, dx, data, treecode, dim=2 ):
 
     import math
     """ Convert a WABBIT grid to a full dense grid in a single matrix.
-
     We asssume here that interpolation has already been performed, i.e. all
     blocks are on the same (finest) level.
-
     returns the full matrix and the domain size. Note matrix is periodic and can
     directly be compared to FLUSI-style results (x=L * 0:nx-1/nx)
     """
@@ -1210,6 +1228,135 @@ def prediction1D( signal1, order=4 ):
         signal_interp[2*k+1] = a*signal1[k]+a*signal1[k+1]+b*signal1[k-1]+b*signal1[k+2]
 
     return signal_interp
+
+
+#%%
+# calculates treecode from the index of the block
+# Note: other then in fortran we start counting from 0
+def blockindex2treecode(ix, dim, treeN):
+
+    treecode = np.zeros(treeN)
+    for d in range(dim):
+        # convert block index to binary
+        binary = list(format(ix[d],"b"))
+        # flip array and convert to numpy
+        binary = np.asarray(binary[::-1],dtype=int)
+        # sum up treecodes
+        lt = np.size(binary)
+        treecode[:lt] = treecode[:lt] + binary *2**d
+
+    # flip again befor returning array
+    return treecode[::-1]
+
+#%%
+def dense_to_wabbit_hdf5(ddata, name , Bs, box_size = None, time = 0, iteration = 0):
+
+    """
+    This function creates a <name>_<time>.h5 file with the wabbit
+    block structure from a given dense data matrix.
+    Therefore the dense data is divided into equal blocks,
+    similar as sparse_to_dense option in wabbit-post.
+     Input:
+         - ddata... 2d/3D array of the data you want to write to a file
+         - name ... prefix name of the datafile
+         - Bs   ... number of grid points per block
+                    is a 2D/3D dimensional array with Bs[0] being the number of
+                    grid points in x direction etc.
+                    The data size in each dimension has to be dividable by Bs.
+                    Optional Input:
+                        - box_size... 2D/3D array of the size of your box
+                        - time    ... time of the data
+                        - iteration ... iteration of the time snappshot
+    """
+    # concatenate filename in the same style as wabbit does
+    fname = name + "_%12.12d" % int(time*1e6) + ".h5"
+    Ndim = ddata.ndim
+    Nsize = np.asarray(ddata.shape)
+    level = 0
+
+    #########################################################
+    # do some initial checks on the input data
+    # 1) check if the size of the domain is given
+    if box_size is None:
+        box = np.ones(Ndim)
+    else:
+        box = box_size
+
+    if (type(Bs) is int):
+        Bs = [Bs]*Ndim
+    # 2) check if number of lattice points is block decomposable
+    # loop over all dimensions
+    for d in range(Ndim):
+        # check if Block is devidable by Bs
+        if (np.remainder(Nsize[d], Bs[d]-1) == 0):
+            if(is_power2(Nsize[d]//(Bs[d]-1))):
+                level = max(level, int(np.log2(Nsize[d]/(Bs[d]-1))))
+            else:
+                err("Number of Intervals must be a power of 2!")
+        else:
+            err("datasize must be multiple of Bs!")
+    # 3) check dimension of array:
+    if Ndim < 2 or Ndim > 3:
+        err("dimensions are wrong")
+    #########################################################
+
+    # assume periodicity:
+    data = np.zeros(Nsize+1)
+    if Ndim == 2:
+        data[:-1, :-1] = ddata
+        # copy first row and column for periodicity
+        data[-1, :] = data[0, :]
+        data[:, -1] = data[:, 0]
+    else:
+        data[:-1, :-1, :-1] = ddata
+        # copy for periodicity
+        data[-1, :, :] = data[0, :, :]
+        data[:, -1, :] = data[:, 0, :]
+        data[:, :, -1] = data[:, :, 0]
+
+    # number of intervals in each dimension
+    Nintervals = [int(2**level)]*Ndim  # note [val]*3 means [val, val , val]
+    Lintervals = box/Nintervals
+    x0 = []
+    treecode = []
+    dx = []
+    bdata = []
+    if Ndim == 3:
+        for ibx in range(Nintervals[0]):
+            for iby in range(Nintervals[1]):
+                for ibz in range(Nintervals[2]):
+                    x0.append([ibx, iby, ibz]*Lintervals)
+                    dx.append(Lintervals/(Bs-1))
+                    lower = x0[-1]/dx[-1]
+                    upper = lower + Bs
+                    treecode.append(blockindex2treecode([ibx, iby, ibz], 3, level))
+                    bdata.append(data[lower[0]:upper[0], lower[1]:upper[1], lower[2]:upper[2]])
+    else:
+        for ibx in range(Nintervals[0]):
+            for iby in range(Nintervals[1]):
+                x0.append([ibx, iby]*Lintervals)
+                dx.append(Lintervals/(Bs-1))
+                lower = x0[-1]/dx[-1]
+                upper = lower + Bs
+                treecode.append(blockindex2treecode([ibx, iby], 2, level))
+                bdata.append(data[lower[0]:upper[0], lower[1]:upper[1]])
+
+    x0 = np.asarray(x0)
+    dx = np.asarray(dx)
+    treecode = np.asarray(treecode)
+    block_data = np.asarray(bdata)
+
+    write_wabbit_hdf5(fname, time, x0, dx, box, block_data, treecode, iteration )
+
+
+# %%
+def is_power2(num):
+    'states if a number is a power of two'
+    return num != 0 and ((num & (num - 1)) == 0)
+
+
+
+
 #%%
 def dir_dense_matrix_2D( direc, var ):
     #Extract all the wabbit fields (all variables or just one) to a field type matrix of dimensions(n_timesteps x n_x x n_y)
@@ -1260,4 +1407,13 @@ def space_time_slice(direc,var,row,column):
     return X_T
 
 #%%
+
+
+
+
+
+
+
+
+
 
