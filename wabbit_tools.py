@@ -351,10 +351,10 @@ def read_wabbit_hdf5(file):
     N = data.shape[0]
     Bs = data.shape[1]
 
-    print("~~~~~~~~~~~~~~~~~~~~~~~~~")
-    print("Reading file %s" % (file) )
-    print("Time=%e it=%i N=%i Bs=%i Jmin=%i Jmax=%i" % (time, iteration, N, Bs, jmin, jmax) )
-    print("~~~~~~~~~~~~~~~~~~~~~~~~~")
+    #print("~~~~~~~~~~~~~~~~~~~~~~~~~")
+    #print("Reading file %s" % (file) )
+    #print("Time=%e it=%i N=%i Bs=%i Jmin=%i Jmax=%i" % (time, iteration, N, Bs, jmin, jmax) )
+    #print("~~~~~~~~~~~~~~~~~~~~~~~~~")
 
     return time, x0, dx, box, data, treecode
 
@@ -807,7 +807,7 @@ def treecode_level( tc ):
 
 # for a treecode list, return max and min level found
 def get_max_min_level( treecode ):
-    import numpy as np
+    #import numpy as np
 
     min_level = 99
     max_level = -99
@@ -1171,8 +1171,8 @@ def dense_matrix(  x0, dx, data, treecode, dim=2 ):
     # all spacings should be the same - it does not matter which one we use.
     ddx = dx[0,0]
 
-    print("Number of blocks %i" % (N))
-    print("Spacing %e domain %e" % (ddx, ddx*nx))
+    #print("Number of blocks %i" % (N))
+    #print("Spacing %e domain %e" % (ddx, ddx*nx))
 
     if dim==2:
         # allocate target field
