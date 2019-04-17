@@ -189,7 +189,7 @@ def get_inifile_dir( dir ):
         return inifile[0]
 
 #%%
-def prepare_resuming_backup( inifile, state_vector_prefixes=['ux','uy','uz','p'] ):
+def prepare_resuming_backup( inifile ):
     """ we look for the latest *.h5 files
         to resume the simulation, and prepare the INI file accordingly.
         Some errors are caught.
@@ -197,23 +197,36 @@ def prepare_resuming_backup( inifile, state_vector_prefixes=['ux','uy','uz','p']
     import numpy as np
     import os
     import glob
-    import insect_tools
+    import flusi_tools
 
     # does the ini file exist?
     if not os.path.isfile(inifile):
         raise ValueError("Inifile not found!")
 
     Tmax = get_ini_parameter(inifile, "Time", "time_max", float)
+    dim = get_ini_parameter(inifile, "Domain", "dim", int)
+
+    physics_type = get_ini_parameter(inifile, "Physics", "physics_type", str)
+
+    if physics_type != "ACM-new":
+        raise ValueError("ERROR! backup resuming is available only for ACM")
+
+    if dim == 2:
+        state_vector_prefixes = ['ux', 'uy', 'p']
+    else:
+        state_vector_prefixes = ['ux', 'uy', 'uz', 'p']
 
     # find list of H5 files for first prefix.
     files = glob.glob( state_vector_prefixes[0] + "*.h5" )
     files.sort()
 
+    print(state_vector_prefixes)
+
     if not files:
         raise ValueError( "Something is wrong: no h5 files found for resuming" )
 
     print('Latest file is:           ' + files[-1])
-    timestamp = insect_tools.get_timestamp_name( files[-1] )
+    timestamp = flusi_tools.get_timestamp_name( files[-1] )
     t0 = float(timestamp) / 1e6
     print('Latest file is at time:   %f' % (t0))
 
@@ -315,7 +328,7 @@ def block_level_distribution_file( file ):
     return counter
 
 #%%
-def read_wabbit_hdf5(file):
+def read_wabbit_hdf5(file, verbose=True, return_iteration=False):
     """ Read a wabbit-type HDF5 of block-structured data.
     Return time, x0, dx, box, data, treecode.
     Get number of blocks and blocksize as
@@ -323,6 +336,10 @@ def read_wabbit_hdf5(file):
     """
     import h5py
     import numpy as np
+
+#    if verbose:
+#        print("~~~~~~~~~~~~~~~~~~~~~~~~~")
+#        print("Reading file %s" % (file) )
 
     fid = h5py.File(file,'r')
     b = fid['coords_origin'][:]
@@ -349,14 +366,17 @@ def read_wabbit_hdf5(file):
 
     jmin, jmax = get_max_min_level( treecode )
     N = data.shape[0]
-    Bs = data.shape[1]
+    Bs = np.flipud(data.shape[1:]) # we have to flip the array since hdf5 stores in [Nz, Ny, Nx] order
 
-    #print("~~~~~~~~~~~~~~~~~~~~~~~~~")
-    #print("Reading file %s" % (file) )
-    #print("Time=%e it=%i N=%i Bs=%i Jmin=%i Jmax=%i" % (time, iteration, N, Bs, jmin, jmax) )
-    #print("~~~~~~~~~~~~~~~~~~~~~~~~~")
+#    if verbose:
+#        print("Time=%e it=%i N=%i Bs[0]=%i Bs[1]=%i Jmin=%i Jmax=%i" % (time, iteration, N, Bs[0], Bs[1], jmin, jmax) )
+#        print("~~~~~~~~~~~~~~~~~~~~~~~~~")
 
-    return time, x0, dx, box, data, treecode
+
+    if return_iteration:
+        return time, x0, dx, box, data, treecode, iteration[0]
+    else:
+        return time, x0, dx, box, data, treecode
 
 #%%
 def read_treecode_hdf5(file):
@@ -374,35 +394,40 @@ def read_treecode_hdf5(file):
     return treecode
 
 #%%
-def write_wabbit_hdf5( file, time, x0, dx, box, data, treecode, iteration = 0,  ):
-    """ Write data from wabbit to an HDF5 file """
+def write_wabbit_hdf5( file, time, x0, dx, box, data, treecode, iteration = 0, dtype=np.float32  ):
+    """ Write data from wabbit to an HDF5 file
+        Note: hdf5 saves the arrays in [Nz, Ny, Nx] order!
+        So: data.shape = Nblocks, Bs[3], Bs[2], Bs[1]
+    """
     import h5py
     import numpy as np
-
+    
 
     Level = np.size(treecode,1)
     if len(data.shape)==4:
-        Bs=[0]*3
         # 3d data
+        Bs=np.zeros([3,1])
         N, Bs[0], Bs[1], Bs[2] = data.shape
+        Bs = np.flipud(Bs)
         print( "Writing to file=%s max=%e min=%e size=%i %i %i " % (file, np.max(data), np.min(data), Bs[0], Bs[1], Bs[2]) )
 
     else:
         # 2d data
-        Bs=[0]*2
+        Bs = np.zeros([2,1])
         N, Bs[0], Bs[1] = data.shape
+        Bs = np.flipud(Bs)
         print("~~~~~~~~~~~~~~~~~~~~~~~~~")
         print("Writing file %s" % (file) )
         print("Time=%e it=%i N=%i Bs[0]=%i Bs[1]=%i Level=%i" % (time, iteration, N, Bs[0], Bs[1],Level) )
         print("~~~~~~~~~~~~~~~~~~~~~~~~~")
 
-
+    
     fid = h5py.File( file, 'w')
 
-    fid.create_dataset( 'coords_origin', data=x0, dtype=np.float32 )
-    fid.create_dataset( 'coords_spacing', data=dx, dtype=np.float32 )
-    fid.create_dataset( 'blocks', data=data, dtype=np.float32 )
-    fid.create_dataset( 'block_treecode', data=treecode, dtype=np.float32 )
+    fid.create_dataset( 'coords_origin', data=x0, dtype=dtype )
+    fid.create_dataset( 'coords_spacing', data=dx, dtype=dtype )
+    fid.create_dataset( 'blocks', data=data, dtype=dtype )
+    fid.create_dataset( 'block_treecode', data=treecode, dtype=dtype )
 
     fid.close()
 
@@ -742,6 +767,16 @@ def fetch_compression_rate_dir(dir):
 
     return( compression )
 
+def add_convergence_labels(dx, er):
+    import numpy as np
+    import matplotlib.pyplot as plt
+
+    for i in range(len(dx)-1):
+        x = 10**( 0.5 * ( np.log10(dx[i]) + np.log10(dx[i+1]) ) )
+        y = 10**( 0.5 * ( np.log10(er[i]) + np.log10(er[i+1]) ) )
+        order = "%2.1f" % ( convergence_order(dx[i:i+1+1],er[i:i+1+1]) )
+        plt.text(x, y, order, horizontalalignment='center', verticalalignment='center',
+                 bbox=dict(facecolor='w', alpha=0.75, edgecolor='none'), fontsize=7 )
 
 def convergence_order(N, err):
     """ This is a small function that returns the convergence order, i.e. the least
@@ -759,7 +794,7 @@ def convergence_order(N, err):
         A[i,0] = np.log(N[i])
         B[i] = np.log(err[i])
 
-    x, residuals, rank, singval  = np.linalg.lstsq(A,B)
+    x, residuals, rank, singval  = np.linalg.lstsq(A, B, rcond=None)
 
     return x[0]
 
@@ -784,14 +819,13 @@ def logfit(N, err):
     return x
 
 
-def plot_wabbit_dir(d, savepng=False):
+def plot_wabbit_dir(d, **kwargs):
     import glob
 
     files = glob.glob(d+'/*.h5')
     files.sort()
-
     for file in files:
-        plot_wabbit_file(file, savepng)
+        plot_wabbit_file(file, **kwargs)
 
 
 # given a treecode tc, return its level
@@ -807,7 +841,7 @@ def treecode_level( tc ):
 
 # for a treecode list, return max and min level found
 def get_max_min_level( treecode ):
-    #import numpy as np
+    import numpy as np
 
     min_level = 99
     max_level = -99
@@ -821,10 +855,11 @@ def get_max_min_level( treecode ):
     return min_level, max_level
 
 
+
 # %%
 def plot_wabbit_file( file, savepng=False, savepdf=False, cmap='rainbow', caxis=None, caxis_symmetric=False, title=True, mark_blocks=True,
                      gridonly=False, contour=False, ax=None, fig=None, ticks=True, colorbar=True, dpi=300, block_edge_color='k',
-                     block_edge_alpha=0.5 , shading='flat',
+                     block_edge_alpha=0.3 , shading='flat',
                      gridonly_coloring='mpirank', flipud=False):
 
     """ Read a (2D) wabbit file and plot it as a pseudocolor plot.
@@ -852,7 +887,7 @@ def plot_wabbit_file( file, savepng=False, savepdf=False, cmap='rainbow', caxis=
             b = fid['refinement_status'][:]
             ref_status = np.array(b, dtype=float)
 
-        if gridonly_coloring is 'lgt_id':
+        if gridonly_coloring == 'lgt_id':
             b = fid['lgt_ids'][:]
             lgt_ids = np.array(b, dtype=float)
 
@@ -861,8 +896,7 @@ def plot_wabbit_file( file, savepng=False, savepdf=False, cmap='rainbow', caxis=
     # read data
     time, x0, dx, box, data, treecode = read_wabbit_hdf5( file )
     # get number of blocks and blocksize
-    N, Bs = data.shape[0], data.shape[1]
-
+    N, Bs = data.shape[0], data.shape[1:]
     # we need these lists to modify the colorscale, as each block usually gets its own
     # and we would rather like to have a global one.
     h = []
@@ -885,9 +919,9 @@ def plot_wabbit_file( file, savepng=False, savepdf=False, cmap='rainbow', caxis=
     for i in range(N):
         if gridonly_coloring not in ['level', 'white']:
             if not flipud :
-                [X, Y] = np.meshgrid( np.arange(Bs)*dx[i,0]+x0[i,0], np.arange(Bs)*dx[i,1]+x0[i,1])
+                [X, Y] = np.meshgrid( np.arange(Bs[0])*dx[i,0]+x0[i,0], np.arange(Bs[1])*dx[i,1]+x0[i,1])
             else:
-                [X, Y] = np.meshgrid( box[0]-np.arange(Bs)*dx[i,0]+x0[i,0], np.arange(Bs)*dx[i,1]+x0[i,1])
+                [X, Y] = np.meshgrid( box[0]-np.arange(Bs[0])*dx[i,0]+x0[i,0], np.arange(Bs[1])*dx[i,1]+x0[i,1])
 
             block = data[i,:,:].copy().transpose()
 
@@ -900,14 +934,14 @@ def plot_wabbit_file( file, savepng=False, savepdf=False, cmap='rainbow', caxis=
                     elif gridonly_coloring in ['refinement-status', 'refinement_status']:
                         block[:,:] = ref_status[i]
 
-                    elif gridonly_coloring is 'lgt_id':
+                    elif gridonly_coloring == 'lgt_id':
                         block[:,:] = lgt_ids[i]
                         tag = "%i" % (lgt_ids[i])
-                        x = Bs/2*dx[i,1]+x0[i,1]
+                        x = Bs[1]/2*dx[i,1]+x0[i,1]
                         if not flipud:
-                            y = Bs/2*dx[i,0]+x0[i,0]
+                            y = Bs[0]/2*dx[i,0]+x0[i,0]
                         else:
-                            y = box[0] - Bs/2*dx[i,0]+x0[i,0]
+                            y = box[0] - Bs[0]/2*dx[i,0]+x0[i,0]
                         plt.text( x, y, tag, fontsize=6, horizontalalignment='center',
                                  verticalalignment='center')
 
@@ -933,43 +967,43 @@ def plot_wabbit_file( file, savepng=False, savepdf=False, cmap='rainbow', caxis=
 
             if mark_blocks and not gridonly:
                 # empty rectangle
-                ax.add_patch( patches.Rectangle( (x0[i,1],x0[i,0]), (Bs-1)*dx[i,1], (Bs-1)*dx[i,0],
+                ax.add_patch( patches.Rectangle( (x0[i,1],x0[i,0]), (Bs[1]-1)*dx[i,1], (Bs[0]-1)*dx[i,0],
                                                 fill=False, edgecolor=block_edge_color, alpha=block_edge_alpha ))
 
-            # unfortunately, each patch of pcolor has its own colorbar, so we have to take care
-            # that they all use the same.
-            if caxis is None:
-                if not caxis_symmetric:
-                    # automatic colorbar, using min and max throughout all patches
-                    for hplots in h:
-                        hplots.set_clim( (min(c1),max(c2))  )
-                else:
-                    # automatic colorbar, but symmetric, using the SMALLER of both absolute values
-                    c= min( [abs(min(c1)), max(c2)] )
-                    for hplots in h:
-                        hplots.set_clim( (-c,c)  )
-            else:
-                # set fixed (user defined) colorbar for all patches
-                for hplots in h:
-                    hplots.set_clim( (min(caxis),max(caxis))  )
         else:
             # if we color the blocks simply with grayscale depending on their level
             # well then just draw rectangles. note: you CAN do that with mpirank etc, but
             # then you do not have a colorbar.
 
-            if gridonly_coloring is 'level':
+            if gridonly_coloring == 'level':
                 level = treecode_level( treecode[i,:] )
                 color = 0.9 - 0.75*(level-jmin)/(jmax-jmin)
             else:
                 color = 1.0
-            ax.add_patch( patches.Rectangle( (x0[i,1],x0[i,0]), (Bs-1)*dx[i,1], (Bs-1)*dx[i,0], facecolor=[color,color,color], edgecolor=block_edge_color ))
+            ax.add_patch( patches.Rectangle( (x0[i,1],x0[i,0]), (Bs[1]-1)*dx[i,1], (Bs[0]-1)*dx[i,0], facecolor=[color,color,color], edgecolor=block_edge_color ))
 
+    # unfortunately, each patch of pcolor has its own colorbar, so we have to take care
+    # that they all use the same.
+    if caxis is None:
+        if not caxis_symmetric:
+            # automatic colorbar, using min and max throughout all patches
+            for hplots in h:
+                hplots.set_clim( (min(c1),max(c2))  )
+        else:
+                # automatic colorbar, but symmetric, using the SMALLER of both absolute values
+                c= min( [abs(min(c1)), max(c2)] )
+                for hplots in h:
+                    hplots.set_clim( (-c,c)  )
+    else:
+        # set fixed (user defined) colorbar for all patches
+        for hplots in h:
+            hplots.set_clim( (min(caxis),max(caxis))  )
 
     if colorbar:
         plt.colorbar(h[0], ax=ax)
 
     if title:
-        plt.title( "t=%f Nb=%i Bs=%i" % (time,N,Bs) )
+        plt.title( "t=%f Nb=%i Bs=(%i,%i)" % (time,N,Bs[1],Bs[0]) )
 
 
     if not ticks:
@@ -1004,6 +1038,9 @@ def plot_wabbit_file( file, savepng=False, savepdf=False, cmap='rainbow', caxis=
         if savepdf:
             plt.savefig( file.replace('.h5','-grid.pdf'), bbox_inches='tight' )
 
+
+
+
 #%%
 def wabbit_error_vs_flusi(fname_wabbit, fname_flusi, norm=2, dim=2):
     """ Compute the error (in some norm) wrt a flusi field.
@@ -1016,6 +1053,10 @@ def wabbit_error_vs_flusi(fname_wabbit, fname_flusi, norm=2, dim=2):
     import numpy as np
     import insect_tools
     import matplotlib.pyplot as plt
+
+    if dim==3:
+        print('I think due to fft2usapmle, this routine works only in 2D')
+        raise ValueError
 
     # read in flusi's reference solution
     time_ref, box_ref, origin_ref, data_ref = insect_tools.read_flusi_HDF5( fname_flusi )
@@ -1042,7 +1083,9 @@ def wabbit_error_vs_flusi(fname_wabbit, fname_flusi, norm=2, dim=2):
         raise ValueError("ERROR! Both fields are not a the same resolutionn")
 
     if data_dense.shape[0] > data_ref.shape[0]:
-        raise ValueError("ERROR! The reference solution is not fine enough for the comparison")
+        warn("WARNING! The reference solution is not fine enough for the comparison! UPSAMPLING!")
+        import fourier_tools
+        data_ref = fourier_tools.fft2_resample( data_ref, data_dense.shape[0] )
 
     # we need to transpose the flusi data...
     data_ref = data_ref.transpose()
@@ -1142,7 +1185,7 @@ def overwrite_block_data_with_level(treecode, data):
 
 
 #%%
-def dense_matrix(  x0, dx, data, treecode, dim=2 ):
+def dense_matrix(  x0, dx, data, treecode, dim=2, verbose=True ):
 
     import math
     """ Convert a WABBIT grid to a full dense grid in a single matrix.
@@ -1154,8 +1197,8 @@ def dense_matrix(  x0, dx, data, treecode, dim=2 ):
     # number of blocks
     N = data.shape[0]
     # size of each block
-    Bs = data.shape[1]
-
+    Bs = data.shape[1:]
+   
     # check if all blocks are on the same level or not
     jmin, jmax = get_max_min_level( treecode )
     if jmin != jmax:
@@ -1164,26 +1207,30 @@ def dense_matrix(  x0, dx, data, treecode, dim=2 ):
 
     # note skipping of redundant points, hence the -1
     if dim==2:
-        nx = int( np.sqrt(N)*(Bs-1) )
+        nx = [int( np.sqrt(N)*(Bs[d]-1) ) for d in range(np.size(Bs))]
     else:
         nx = int( math.pow(N,1.0/dim)*(Bs-1)) +1
 
+   
     # all spacings should be the same - it does not matter which one we use.
-    ddx = dx[0,0]
-
-    #print("Number of blocks %i" % (N))
-    #print("Spacing %e domain %e" % (ddx, ddx*nx))
+    ddx = dx[0,:]
+    if verbose:
+        print("Nblocks :" , (N))
+        print("Spacing :",ddx)
+        print("Domain  :", ddx*nx)
 
     if dim==2:
         # allocate target field
-        field = np.zeros([nx,nx])
-        print("Dense field resolution %i x %i" % (nx, nx) )
+        field = np.zeros(nx)
+        if verbose:
+            print("Resolution :", nx )
         # domain size
-        box = [dx[0,0]*nx, dx[0,1]*nx]
+        box = ddx*nx
     else:
         # allocate target field
         field = np.zeros([nx,nx,nx])
-        print("Dense field resolution %i x %i x %i" % (nx, nx, nx) )
+        if verbose:
+            print("Dense field resolution %i x %i x %i" % (nx, nx, nx) )
         # domain size
         box = [dx[0,0]*nx, dx[0,1]*nx, dx[0,2]*nx]
 
@@ -1199,7 +1246,7 @@ def dense_matrix(  x0, dx, data, treecode, dim=2 ):
         else:
             # copy block content to data field. Note we skip the last points, which
             # are the redundant nodes.
-            field[ ix0:ix0+Bs-1, iy0:iy0+Bs-1 ] = data[i,0:-1,0:-1]
+            field[ ix0:ix0+Bs[0]-1, iy0:iy0+Bs[1]-1 ] = data[i,0:-1,0:-1]
 
     return(field, box)
 
@@ -1249,8 +1296,84 @@ def blockindex2treecode(ix, dim, treeN):
     return treecode[::-1]
 
 #%%
-def dense_to_wabbit_hdf5(ddata, name , Bs, box_size = None, time = 0, iteration = 0):
+def command_on_each_hdf5_file(directory, command):
+    """
+    This routine performs a shell command on each *.h5 file in a given directory!
+    
+    Input:
+        directory - directory with h5 files
+        command - a shell command which specifies the location of the file with %s
+                    Example command = "touch %s"
+                    
+    Example:
+    command_on_each_hdf5_file("/path/to/my/data", "/path/to/wabbit/wabbit-post --dense-to-sparse --eps=0.02 %s")
+    """
+    import re
+    import os
+    import glob
+    
+    if not os.path.exists(directory):
+        err("The given directory does not exist!")
+    
+    files = glob.glob(directory+'/*.h5')
+    files.sort()
+    for file in files:  
+        c = command  % file
+        os.system(c)
 
+#%%
+def flusi_to_wabbit_dir(dir_flusi, dir_wabbit , *args, **kwargs ):
+    """
+    Convert directory with flusi *h5 files to wabbit *h5 files
+    """
+    import re
+    import os
+    import glob
+    
+    if not os.path.exists(dir_wabbit):
+        os.makedirs(dir_wabbit)
+    if not os.path.exists(dir_flusi):
+        err("The given directory does not exist!")
+    
+    files = glob.glob(dir_flusi+'/*.h5')
+    files.sort()
+    for file in files:
+        
+        fname_wabbit = dir_wabbit + "/" + re.split("_\d+.h5",os.path.basename(file))[0]
+
+        flusi_to_wabbit(file, fname_wabbit ,  *args, **kwargs )
+    
+#%%
+def flusi_to_wabbit(fname_flusi, fname_wabbit , level, dim=2, ):
+
+    """
+    Convert flusi data file to wabbit data file. 
+    """
+    import numpy as np
+    import insect_tools
+    import matplotlib.pyplot as plt
+
+    if dim==3:
+        print('I think due to fft2usapmle, this routine works only in 2D')
+        raise ValueError
+    # read in flusi's reference solution
+    time, box, origin, data_flusi = insect_tools.read_flusi_HDF5( fname_flusi )
+    box = box[1:]
+    data_flusi = np.squeeze(data_flusi).T
+    n = np.asarray(data_flusi.shape)
+    for d in range(n.ndim):
+        # check if Block is devidable by Bs
+        if (np.remainder(n[d], 2**level) != 0):
+            err("Number of Grid points has to be a power of 2!")
+    # Note we have to flip  n here because Bs = [BsX, BsY] 
+    # The order of Bs is choosen like it is in WABBIT. 
+    Bs = np.flipud(n)//2**level + 1
+    dense_to_wabbit_hdf5(data_flusi, fname_wabbit , Bs, box, time)
+
+
+#%%
+def dense_to_wabbit_hdf5(ddata, name , Bs, box_size = None, time = 0, iteration = 0, dtype=np.float32):
+    
     """
     This function creates a <name>_<time>.h5 file with the wabbit
     block structure from a given dense data matrix.
@@ -1258,29 +1381,33 @@ def dense_to_wabbit_hdf5(ddata, name , Bs, box_size = None, time = 0, iteration 
     similar as sparse_to_dense option in wabbit-post.
      Input:
          - ddata... 2d/3D array of the data you want to write to a file
-         - name ... prefix name of the datafile
+                     Note ddata.shape=[Ny,Nx] !!
+         - name ... prefix of the name of the datafile (e.g. "rho", "p", "Ux")
          - Bs   ... number of grid points per block
                     is a 2D/3D dimensional array with Bs[0] being the number of
                     grid points in x direction etc.
                     The data size in each dimension has to be dividable by Bs.
                     Optional Input:
-                        - box_size... 2D/3D array of the size of your box
+                        - box_size... 2D/3D array of the size of your box [Lx, Ly, Lz]
                         - time    ... time of the data
                         - iteration ... iteration of the time snappshot
+    Output:
+        - filename of the hdf5 output
     """
     # concatenate filename in the same style as wabbit does
     fname = name + "_%12.12d" % int(time*1e6) + ".h5"
     Ndim = ddata.ndim
     Nsize = np.asarray(ddata.shape)
     level = 0
-
+    Bs = np.asarray(Bs)# make sure Bs is a numpy array
+    Bs = np.flipud(Bs) # flip Bs such that Bs=[BsY, BsX] the order is the same as for Nsize=[Ny,Nx]  
     #########################################################
     # do some initial checks on the input data
     # 1) check if the size of the domain is given
     if box_size is None:
         box = np.ones(Ndim)
     else:
-        box = box_size
+        box = np.asarray(box_size)
 
     if (type(Bs) is int):
         Bs = [Bs]*Ndim
@@ -1290,7 +1417,7 @@ def dense_to_wabbit_hdf5(ddata, name , Bs, box_size = None, time = 0, iteration 
         # check if Block is devidable by Bs
         if (np.remainder(Nsize[d], Bs[d]-1) == 0):
             if(is_power2(Nsize[d]//(Bs[d]-1))):
-                level = max(level, int(np.log2(Nsize[d]/(Bs[d]-1))))
+                level = int(max(level, np.log2(Nsize[d]/(Bs[d]-1))))
             else:
                 err("Number of Intervals must be a power of 2!")
         else:
@@ -1316,7 +1443,8 @@ def dense_to_wabbit_hdf5(ddata, name , Bs, box_size = None, time = 0, iteration 
 
     # number of intervals in each dimension
     Nintervals = [int(2**level)]*Ndim  # note [val]*3 means [val, val , val]
-    Lintervals = box/Nintervals
+    Lintervals = box[:Ndim]/Nintervals
+    Lintervals = np.flipud(Lintervals)
     x0 = []
     treecode = []
     dx = []
@@ -1327,8 +1455,11 @@ def dense_to_wabbit_hdf5(ddata, name , Bs, box_size = None, time = 0, iteration 
                 for ibz in range(Nintervals[2]):
                     x0.append([ibx, iby, ibz]*Lintervals)
                     dx.append(Lintervals/(Bs-1))
-                    lower = x0[-1]/dx[-1]
+
+                    lower = x0[-1]//dx[-1]
+                    lower = np.asarray(lower, dtype=int)
                     upper = lower + Bs
+
                     treecode.append(blockindex2treecode([ibx, iby, ibz], 3, level))
                     bdata.append(data[lower[0]:upper[0], lower[1]:upper[1], lower[2]:upper[2]])
     else:
@@ -1336,8 +1467,11 @@ def dense_to_wabbit_hdf5(ddata, name , Bs, box_size = None, time = 0, iteration 
             for iby in range(Nintervals[1]):
                 x0.append([ibx, iby]*Lintervals)
                 dx.append(Lintervals/(Bs-1))
-                lower = x0[-1]/dx[-1]
+
+                lower = x0[-1]//dx[-1]
+                lower = np.asarray(lower, dtype=int)
                 upper = lower + Bs
+
                 treecode.append(blockindex2treecode([ibx, iby], 2, level))
                 bdata.append(data[lower[0]:upper[0], lower[1]:upper[1]])
 
@@ -1346,22 +1480,18 @@ def dense_to_wabbit_hdf5(ddata, name , Bs, box_size = None, time = 0, iteration 
     treecode = np.asarray(treecode)
     block_data = np.asarray(bdata)
 
-    write_wabbit_hdf5(fname, time, x0, dx, box, block_data, treecode, iteration )
-
+    write_wabbit_hdf5(fname, time, x0, dx, box, block_data, treecode, iteration, dtype )
+    return fname
 
 # %%
 def is_power2(num):
     'states if a number is a power of two'
     return num != 0 and ((num & (num - 1)) == 0)
 
-
-
-
 #%%
 def dir_dense_matrix_2D( direc, var ):
     #Extract all the wabbit fields (all variables or just one) to a field type matrix of dimensions(n_timesteps x n_x x n_y)
     import glob
-    import numpy as np
     #import wabbit_tools as w2p
     if var is None:
         path = direc+'/*.h5'
@@ -1376,11 +1506,14 @@ def dir_dense_matrix_2D( direc, var ):
 
     noF = len(files) # number of total files
     fin = m=read_wabbit_hdf5(files[0])
-    hel = len(dense_matrix(fin[1], fin[2], fin[4], fin[5], dim=2)[0])
-    field = np.zeros((noF,hel,hel))
+    hel2 = int(fin[3][0]/fin[2][0,1])
+    hel1 = int(fin[3][1]/fin[2][0,0])
+    #hel1 = len(dense_matrix(fin[1], fin[2], fin[4], fin[5], dim=2)[0])
+    #hel1 = len(dense_matrix(fin[1], fin[2], fin[4], fin[5], dim=2)[1])    
+    field = np.zeros((noF,hel1,hel2))
     for file in range(noF):
         m=read_wabbit_hdf5(files[file])
-        mm=dense_matrix(m[1],m[2],m[4],m[5], dim=2)
+        mm=dense_matrix(m[1],m[2],m[4],m[5], dim=2,verbose=False)
         field[file,:,:]=mm[0]       
 
 
@@ -1388,7 +1521,6 @@ def dir_dense_matrix_2D( direc, var ):
 
 #%%
 def space_time_slice(direc,var,row,column):
-    import numpy as np
     X_T_MAT = dir_dense_matrix_2D(direc,var)
     if row is None and column is None:
         print('!!!ERROR!!! A row OR a column has to be specified')
@@ -1406,14 +1538,157 @@ def space_time_slice(direc,var,row,column):
             X_T[line,:]= X_T_MAT[line,:,column]
     return X_T
 
+
+def stator_blade_eval(path,Nx,Ny,Lx,Ly,x_in,x_out,y_in_low,y_in_up,y_out_low,y_out_up):
+    import math
+    #OUTPUT ORDER
+    #0,1 pressure
+    #2,3 density
+    #4,5 ux
+    #6,7 uy
+    #8,9 mach
+    #10,11 total pressure
+    #12,13 flow angle
+    #14,15 temperature
+    Nx_in = int(x_in/Lx*Nx)
+    Nx_out = int(x_out/Lx*Nx)
+
+    Ny_in_low=int(y_in_low/Ly*Ny)
+    Ny_in_up=int(y_in_up/Ly*Ny)
+
+    Ny_out_low=int(y_out_low/Ly*Ny)
+    Ny_out_up=int(y_out_up/Ly*Ny)
+
+    pressure_in=space_time_slice(path,'p',None,Nx_in)
+    pressure_out = space_time_slice(path,'p',None,Nx_out)
+    
+    density_in=space_time_slice(path,'rho',None,Nx_in)
+    density_out=space_time_slice(path,'rho',None,Nx_out)
+    
+    ux_in=space_time_slice(path,'Ux',None,Nx_in)
+    ux_out=space_time_slice(path,'Ux',None,Nx_out)
+    
+    uy_in=space_time_slice(path,'Uy',None,Nx_in)
+    uy_out=space_time_slice(path,'Uy',None,Nx_out)
+        
+    eps = 1e-10   
+    kappa=1.1775
+    R = 287.05
+    uy_in_slice = uy_in[:,Ny_in_low:Ny_in_up] 
+    uy_in_slice[np.abs(uy_in_slice) < eps] = 0 
+    
+    uy_out_slice=uy_out[:,Ny_out_low:Ny_out_up] 
+    uy_out_slice[np.abs(uy_out_slice) < eps] = 0
+    
+    ux_in_slice=ux_in[:,Ny_in_low:Ny_in_up] 
+    ux_in_slice[np.abs(ux_in_slice) < eps] = 0    
+    
+    ux_out_slice=ux_out[:,Ny_out_low:Ny_out_up]
+    ux_out_slice[np.abs(ux_out_slice) < eps] = 0 
+        
+    p_in_slice=pressure_in[:,Ny_in_low:Ny_in_up]
+    p_out_slice=pressure_out[:,Ny_out_low:Ny_out_up]
+    
+    rho_in_slice=density_in[:,Ny_in_low:Ny_in_up]
+    rho_out_slice=density_out[:,Ny_out_low:Ny_out_up]
+        
+    vel_in =(ux_in_slice**2+uy_in_slice**2)**0.5 
+    vel_out=(ux_out_slice**2+uy_out_slice**2)**0.5
+    
+    t_in=p_in_slice/(R*rho_in_slice)
+    t_out=p_out_slice/(R*rho_out_slice)
+    
+    a_in = (kappa*R*t_in)**0.5
+    a_out =  (kappa*R*t_out)**0.5
+    
+    Mach_in = vel_in/a_in
+    Mach_out = vel_out/a_out
+    
+    p_in_stag = (1+(kappa-1)/2*Mach_in**2)**(kappa/(kappa-1))*p_in_slice
+    p_out_stag =(1+(kappa-1)/2*Mach_out**2)**(kappa/(kappa-1))*p_out_slice
+    flow_angle_in=np.zeros([(Mach_in.shape)[0],(Mach_in.shape)[1]])
+    flow_angle_out=np.zeros([(Mach_out.shape)[0],(Mach_out.shape)[1]])
+        
+    flow_angle_in = np.arctan(np.divide(uy_in_slice,ux_in_slice))*180/math.pi
+    flow_angle_out = np.arctan(np.divide(uy_out_slice,ux_out_slice))*180/math.pi
+#    for i in range((flow_angle_in.shape)[0]):
+#        for j in range((flow_angle_in.shape)[1]):
+#            if ux_in_slice[i,j]!=0:
+#                flow_angle_in[i,j] = np.arctan(uy_in_slice[i,j]/ux_in_slice[i,j])*180/math.pi
+#        for j in range((flow_angle_in.shape)[1]):
+#            if ux_out_slice[i,j]!=0:
+#                flow_angle_out[i,j] = np.arctan(uy_out_slice[i,j]/ux_out_slice[i,j])*180/math.pi
+    
+    
+    P1=np.mean(p_in_slice,axis=0)
+    P2=np.mean(p_out_slice,axis=0)
+    
+    PT1=np.mean(p_in_slice,axis=1)
+    PT2=np.mean(p_out_slice,axis=1)
+    
+    RHO1=np.mean(rho_in_slice,axis=0)
+    RHO2=np.mean(rho_out_slice,axis=0)
+    
+    RHOT1=np.mean(rho_in_slice,axis=1)
+    RHOT2=np.mean(rho_out_slice,axis=1)
+    
+    UX1=np.mean(ux_in_slice,axis=0)
+    UX2=np.mean(ux_out_slice,axis=0)
+    
+    UXT1=np.mean(ux_in_slice,axis=1)
+    UXT2=np.mean(ux_out_slice,axis=1)
+    
+    UY1=np.mean(uy_in_slice,axis=0)
+    UY2=np.mean(uy_out_slice,axis=0)
+    
+    UYT1=np.mean(ux_in_slice,axis=1)
+    UYT2=np.mean(ux_out_slice,axis=1)
+    
+    #Mach_in[Mach_in==0]=np.nan
+    #Mach_out[Mach_out==0]=np.nan
+    MACH1=np.nanmean(Mach_in,axis=0)
+    MACH2=np.nanmean(Mach_out,axis=0)
+    
+    MACHT1=np.nanmean(Mach_in,axis=1)
+    MACHT2=np.nanmean(Mach_out,axis=1)
+    
+    
+    P_STAG1=np.mean(p_in_stag,axis=0)
+    P_STAG2=np.mean(p_out_stag,axis=0)
+    
+    P_STAGT1=np.mean(p_in_stag,axis=1)
+    P_STAGT2=np.mean(p_out_stag,axis=1)
+    
+    ALPHA1=np.mean(flow_angle_in,axis=0)
+    ALPHA2=np.mean(flow_angle_out,axis=0)
+    
+    ALPHAT1=np.mean(flow_angle_in,axis=1)
+    ALPHAT2=np.mean(flow_angle_out,axis=1)
+    
+    T1=np.mean(t_in,axis=0)
+    T2=np.mean(t_out,axis=0)
+    
+    T1T=np.mean(t_in,axis=1)
+    T2T=np.mean(t_out,axis=1)
+    
+    
+    MEANS_T_IN=np.asarray([PT1,RHOT1,UXT1,UYT1,MACHT1,P_STAGT1,ALPHAT1,T1T])
+    MEANS_T_OUT=np.asarray([PT2,RHOT2,UXT2,UYT2,MACHT2,P_STAGT2,ALPHAT2,T2T])    
+    MEANS_X_IN=np.asarray([P1,RHO1,UX1,UY1,MACH1,P_STAG1,ALPHA1,T1])
+    MEANS_X_OUT =np.asarray([P2,RHO2,UX2,UY2,MACH2,P_STAG2,ALPHA2,T2])   
+    mask = quick_matrix(path+'/mask_000000000000.h5')
+    mask[Ny_out_low:Ny_out_up,Nx_out]=2
+    mask[Ny_in_low:Ny_in_up,Nx_in]=2    
+    return MEANS_T_IN,MEANS_T_OUT, MEANS_X_IN,MEANS_X_OUT,mask
+
 #%%
-
-
-
-
-
-
-
+def quick_matrix(path):
+    x0=read_wabbit_hdf5(path)[1]
+    dx = read_wabbit_hdf5(path)[2]
+    data = read_wabbit_hdf5(path)[4]
+    treecode = read_wabbit_hdf5(path)[5]
+    M = dense_matrix(  x0, dx, data, treecode, dim=2, verbose=True )[0]
+    return M
 
 
 
